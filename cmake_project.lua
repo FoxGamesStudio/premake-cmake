@@ -1,4 +1,3 @@
---
 -- Name:        cmake_project.lua
 -- Purpose:     Generate a cmake C/C++ project file.
 -- Author:      Ryan Pusztai
@@ -96,6 +95,84 @@ local function is_empty(t)
 	return true
 end
 
+local function get_cxx_standard_and_extensions(d)
+	if type(d) ~= "string" or d == "" or d == "Default" then
+		return nil, nil
+	end
+
+	local map = {
+		["C++98"] = "98",
+		["C++0x"] = "11",
+		["C++11"] = "11",
+		["C++1y"] = "14",
+		["C++14"] = "14",
+		["C++1z"] = "17",
+		["C++17"] = "17",
+		["C++2a"] = "20",
+		["C++20"] = "20",
+		["C++2b"] = "23",
+		["C++23"] = "23",
+		["C++2c"] = "26",
+		["C++26"] = "26",
+
+		["gnu++98"] = "98",
+		["gnu++0x"] = "11",
+		["gnu++11"] = "11",
+		["gnu++1y"] = "14",
+		["gnu++14"] = "14",
+		["gnu++1z"] = "17",
+		["gnu++17"] = "17",
+		["gnu++2a"] = "20",
+		["gnu++20"] = "20",
+		["gnu++2b"] = "23",
+		["gnu++23"] = "23",
+		["gnu++2c"] = "26",
+		["gnu++26"] = "26",
+	}
+
+	if d == "C++latest" then
+		return "${CMAKE_CXX_STANDARD_LATEST}", nil
+	end
+
+	local standard = map[d]
+	if standard == nil then
+		return nil, nil
+	end
+
+	local extensions = (d:find("^gnu", 1, false) ~= nil) and "YES" or "NO"
+	return standard, extensions
+end
+
+local function get_c_standard_and_extensions(d)
+	if type(d) ~= "string" or d == "" or d == "Default" then
+		return nil, nil
+	end
+
+	local map = {
+		["C89"] = "90",
+		["C90"] = "90",
+		["C99"] = "99",
+		["C11"] = "11",
+		["C17"] = "17",
+		["C23"] = "23",
+
+		["gnu89"] = "90",
+		["gnu90"] = "90",
+		["gnu99"] = "99",
+		["gnu11"] = "11",
+		["gnu17"] = "17",
+		["gnu23"] = "23",
+	}
+
+	local standard = map[d]
+	if standard == nil then
+		return nil, nil
+	end
+
+	local extensions = (d:find("^gnu", 1, false) ~= nil) and "YES" or "NO"
+	return standard, extensions
+end
+
 local one_expression = "one_expression"
 local table_expression = "table_expression"
 local function generator_expression(prj, callback, mode)
@@ -103,7 +180,7 @@ local function generator_expression(prj, callback, mode)
 	local by_cfg = {}
 	for cfg in project.eachconfig(prj) do
 		local settings = callback(cfg)
-		
+
 		if not common then
 			common = table.arraycopy(settings)
 		else
@@ -322,10 +399,10 @@ function m.generate(prj)
 		end
 		_p(0, ')')
 	end
-	
+
 	local msvc_frameworkdirs = generator_expression(prj, function(cfg) return p.tools.msc.getincludedirs(cfg, {}, {}, cfg.frameworkdirs, cfg.includedirsafter) end)
 	local gcc_frameworkdirs = generator_expression(prj, function(cfg) return p.tools.gcc.getincludedirs(cfg, {}, {}, cfg.frameworkdirs, cfg.includedirsafter) end)
-	
+
 	if #msvc_frameworkdirs > 0 or #gcc_frameworkdirs > 0 then
 		_p(0, 'if (MSVC)')
 		_p(1, 'target_compile_options("%s" PRIVATE %s)', prj.name, msvc_frameworkdirs)
@@ -357,7 +434,7 @@ function m.generate(prj)
 
 	local msvc_undefines = generator_expression(prj, function(cfg) return p.tools.msc.getundefines(cfg.undefines) end)
 	local gcc_undefines = generator_expression(prj, function(cfg) return p.tools.gcc.getundefines(cfg.undefines) end)
-	
+
 	if #msvc_undefines > 0 or #gcc_undefines > 0 then
 		_p(0, 'if (MSVC)')
 		_p(1, 'target_compile_options("%s" PRIVATE %s)', prj.name, msvc_undefines)
@@ -376,34 +453,42 @@ function m.generate(prj)
 		_p(0, ')')
 	end
 
-	-- C++ standard
-	-- only need to configure it specified
+	-- language standards
 	local cppdialect = generator_expression(prj, function(cfg)
-		if (cfg.cppdialect ~= nil and cfg.cppdialect ~= '') or cfg.cppdialect == 'Default' then
-			local standard = {
-				["C++98"] = 98,
-				["C++11"] = 11,
-				["C++14"] = 14,
-				["C++17"] = 17,
-				["C++20"] = 20,
-				["gnu++98"] = 98,
-				["gnu++11"] = 11,
-				["gnu++14"] = 14,
-				["gnu++17"] = 17,
-				["gnu++20"] = 20
-			}
-			return { tostring(standard[cfg.cppdialect]) }
-		end
-		return {}
+		local standard, _ = get_cxx_standard_and_extensions(cfg.cppdialect)
+		return standard and { standard } or {}
 	end, one_expression)
-	if #cppdialect > 0 then
-		local extension = generator_expression(prj, function(cfg) return iif(cfg.cppdialect:find('^gnu') == nil, {'NO'}, {'YES'}) end, one_expression)
-		local pic = generator_expression(prj, function(cfg) return iif(cfg.pic == 'On', {'True'}, {'False'}) end, one_expression)
-		local lto = generator_expression(prj, function(cfg) return iif(cfg.linktimeoptimization, {'True'}, {'False'}) end, one_expression)
+	local cppextensions = generator_expression(prj, function(cfg)
+		local _, extensions = get_cxx_standard_and_extensions(cfg.cppdialect)
+		return extensions and { extensions } or {}
+	end, one_expression)
+	local cdialect = generator_expression(prj, function(cfg)
+		local standard, _ = get_c_standard_and_extensions(cfg.cdialect)
+		return standard and { standard } or {}
+	end, one_expression)
+	local cextensions = generator_expression(prj, function(cfg)
+		local _, extensions = get_c_standard_and_extensions(cfg.cdialect)
+		return extensions and { extensions } or {}
+	end, one_expression)
+	local pic = generator_expression(prj, function(cfg) return iif(cfg.pic == 'On', {'True'}, {'False'}) end, one_expression)
+	local lto = generator_expression(prj, function(cfg) return iif(cfg.linktimeoptimization, {'True'}, {'False'}) end, one_expression)
+
+	if #cppdialect > 0 or #cdialect > 0 or #pic > 0 or #lto > 0 then
 		_p(0, 'set_target_properties("%s" PROPERTIES', prj.name)
-		_p(1, 'CXX_STANDARD %s', cppdialect)
-		_p(1, 'CXX_STANDARD_REQUIRED YES')
-		_p(1, 'CXX_EXTENSIONS %s', extension)
+		if #cppdialect > 0 then
+			_p(1, 'CXX_STANDARD %s', cppdialect)
+			_p(1, 'CXX_STANDARD_REQUIRED YES')
+			if #cppextensions > 0 then
+				_p(1, 'CXX_EXTENSIONS %s', cppextensions)
+			end
+		end
+		if #cdialect > 0 then
+			_p(1, 'C_STANDARD %s', cdialect)
+			_p(1, 'C_STANDARD_REQUIRED YES')
+			if #cextensions > 0 then
+				_p(1, 'C_EXTENSIONS %s', cextensions)
+			end
+		end
 		_p(1, 'POSITION_INDEPENDENT_CODE %s', pic)
 		_p(1, 'INTERPROCEDURAL_OPTIMIZATION %s', lto)
 		_p(0, ')')
@@ -443,7 +528,7 @@ function m.generate(prj)
 	end
 
 	-- libs
-	local libs = generator_expression(prj, function(cfg) 
+	local libs = generator_expression(prj, function(cfg)
 		local toolset = m.getcompiler(cfg)
 		local isclangorgcc = toolset == p.tools.clang or toolset == p.tools.gcc
 		local uselinkgroups = isclangorgcc and cfg.linkgroups == p.ON
@@ -557,7 +642,7 @@ function m.generate(prj)
 	-- custom command
 --	local custom_output_directories_by_cfg = {}
 	local custom_commands_by_filename = {}
-	
+
 	local function addCustomCommand(cfg, fileconfig, filename)
 		if #fileconfig.buildcommands == 0 or #fileconfig.buildoutputs == 0 then
 			return
@@ -606,7 +691,7 @@ function m.generate(prj)
 			end
 		end
 	})
-	
+
 --[[
 	local custom_output_directories = generator_expression(prj, function(cfg) return table.difference(table.unique(custom_output_directories_by_cfg[cfg]), {"."}) end, table_expression)
 	if not is_empty(custom_output_directories) then
@@ -651,7 +736,7 @@ function m.generate(prj)
 				local target_name = 'CUSTOM_TARGET_' .. config_prefix .. filename:gsub('/', '_'):gsub('\\', '_')
 				--custom_target_by_cfg[cfg] = target_name
 				_p(0, 'add_custom_target(%s DEPENDS %s)', target_name, table.implode(custom_ouput_by_cfg[cfg]["outputs"],"",""," "))
-				
+
 				_p(0, 'add_dependencies(%s %s)', prj.name, target_name)
 				if same_output_by_cfg then break end
 			end
